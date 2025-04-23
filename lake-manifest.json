@@ -5,7 +5,7 @@
    "type": "git",
    "subDir": null,
    "scope": "leanprover-community",
-   "rev": "a5abec925c22ff12ab61d8c9f42d443ce6ee8008",
+   "rev": "5e32622d0caf9330d16c5e9c78f9c42b5cc1105b",
    "name": "mathlib",
    "manifestFile": "lake-manifest.json",
    "inputRev": "master",
