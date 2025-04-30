@@ -49,7 +49,7 @@ def trainingData (args : Cli.Parsed) : IO UInt32 := do
       let steps := results.bind (fun result => result.steps)
 
       let PT_real : ProofTree := getProofTree steps |>.get!
-      IO.println s!"ProofTree: \n{PT_real}"
+      IO.println s!"ProofTree: \n{PT_real}\n\n"
 
 
 
@@ -70,4 +70,4 @@ def main (args : List String) : IO UInt32 :=
   training_data.validate args
 
 
-#eval main ["ProofTree.Basic"]
+#eval main ["Mathlib.Logic.Hydra"]
