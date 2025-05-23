@@ -5,52 +5,108 @@ import TrainingData.Utils.Range
 import TrainingData.TreeParser
 import Mathlib.Data.String.Defs
 import Mathlib.Lean.CoreM
+import TrainingData.Utils.HumanTheorem
 -- import Batteries.Lean.Util.Path
 import Batteries.Data.String.Basic
 import Mathlib.Tactic.Change
 import Cli
 import ProofTree.Utils
+
+
 open Lean Elab IO Meta
-open Cli System Std
+open Lean Core Elab IO Meta Term Command Tactic Cli
 
 
+
+def _root_.Lean.Elab.Command.State.withOptions (state : Command.State) (options : Options) :=
+  { state with
+    scopes := state.scopes.map fun s : Scope =>
+      { s with opts := Id.run do
+          let mut opts := s.opts
+          for (k, v) in options do
+            opts := opts.insert k v
+          opts } }
 
 
 def trainingData (args : Cli.Parsed) : IO UInt32 := do
     searchPathRef.set compile_time_search_path%
 
-    let module := args.positionalArg! "module" |>.as! ModuleName
-    let infos ← getElabDeclInfo (← moduleInfoTrees module)
-    let trees ← getInvocationTrees module
-    let hash ← generateRandomHash
-
-    let mut idJsons : List (String × Json) := []
-    let mut thmAnnotatedTrees_enum : List (String × List (Nat × InfoTree)) := []
-
-    for (idx,t) in trees.enum do
-      for tac in t.tactics do
-        match getElabDeclOfTacticInvocation infos tac with
-        | some elabDeclInfo => do
-          let json ← tac.trainingData' elabDeclInfo module hash
-          if not <| thmAnnotatedTrees_enum.any (fun (s,_) => s==json.1) then
-            thmAnnotatedTrees_enum := (json.1,[(idx,t)]) :: thmAnnotatedTrees_enum
-          else
-            thmAnnotatedTrees_enum := thmAnnotatedTrees_enum.map (fun (s,ts) => if (s==json.1 && (not (ts.any (fun (i,_) => i==idx)))) then (s,(idx,t)::ts) else (s,ts))
-          idJsons := json :: idJsons
-        | none => pure ()
+    let mod := args.positionalArg! "module" |>.as! ModuleName
 
 
-    let thmAnnotatedTrees : List (String × List InfoTree) := thmAnnotatedTrees_enum.map (fun (s,ts) => (s,ts.map (fun (_,t) =>t) |>.reverse))
-    let parsedTrees : List (String × (IO (List Result))) := thmAnnotatedTrees.map (fun (s,ts) => (s,ts.filterMapM (BetterParser)))
+    let fileName := (← findLean mod).toString
+    -- let mut trajectories_json := []
+    let steps := Lean.Elab.IO.processInput' (← moduleSource mod) none {} fileName
+
+    let targets := steps.bind fun c => (MLList.ofList c.diff).map fun i => (c, i)
+
+    let mut targets_new : Array (CompilationStep × ConstantInfo) := #[]
+
+    for (cmd, ci) in targets do
+      let isThm? := match ci with
+        | .thmInfo _ => true
+        | _ => false
+
+      let pf_env := cmd.after
+      let ctx : Core.Context := {fileName := "", fileMap := default}
+      let state : Core.State := {env := pf_env}
+      let isHuman := match (← CoreM.run (Lean.Name.isHumanTheorem ci.name) ctx state |>.toIO').toOption with
+        | some x => x.1
+        | none => false
+
+      if not isThm? || not isHuman then
+        continue
+
+      targets_new := targets_new.push (cmd, ci)
+
+    let thmAnnotatedTrees : List (ConstantInfo × CompilationStep × List InfoTree) := targets_new.map (fun (cmd, ci) => (ci, cmd, cmd.trees) )|>.toList
+
+
+    -- let thmAnnotatedTrees : List (String × List InfoTree) := thmAnnotatedTrees_enum.map (fun (s,ts) => (s,ts.map (fun (_,t) =>t) |>.reverse))
+    let parsedTrees : List (ConstantInfo × CompilationStep  × (IO (List Result))) := thmAnnotatedTrees.map (fun (ci,cmd,ts) => (ci,cmd,ts.filterMapM (BetterParser)))
 
     -- let mut PTs := []
-    for (_,results) in parsedTrees.reverse do
+    for (_,cmd,results) in parsedTrees do
       let results ← results
-      let steps := results.bind (fun result => result.steps)
+      let steps := results.flatMap (fun result => result.steps)
 
       let PT_real : ProofTree := getProofTree steps |>.get!
-      IO.println s!"ProofTree: \n{PT_real}\n\n"
 
+      IO.println s!"ProofTree: \n{PT_real}\n\n"
+      -- let PT_json : Json := toJson PT_real
+      -- IO.println s!"ProofTree JSON: \n{PT_json}\n\n"
+
+      let breakpoints := PT_real.getBreakpoints
+      IO.println s!"Breakpoints: \n{breakpoints.map (fun ps => ps.tacticString)}\n\n"
+
+      let new_thm := insertBreakpointsFromTree cmd.src.toString PT_real
+      IO.println s!"New theorem: \n{new_thm}\n\n"
+
+      let contentsBefore : Substring := match cmd.src with
+      | ⟨s, b, _⟩ => ⟨s, 0, b⟩
+
+      let options := ({} : KVMap)
+        |>.insert `maxHeartbeats (.ofNat 200000) -- TODO determine a heartbeat count
+        |>.insert `debug.byAsSorry (.ofBool false)
+        |>.insert `linter.unusedVariables (.ofBool true)
+        |>.insert `linter.unusedTactic (.ofBool true)
+        |>.insert `linter.unreachableTactic (.ofBool true)
+
+      let elaborated_steps := Lean.Elab.IO.compilationSteps
+        (Parser.mkInputContext (contentsBefore.toString ++ new_thm) fileName)
+        cmd.parserStateBefore
+        (cmd.commandStateBefore.withOptions options)
+
+      let head? ← elaborated_steps.uncons
+      let outputted : Option CompilationStep := match head? with
+      | none => none
+      | some (cstep, _) => some cstep
+
+      match outputted with
+      | none => IO.println s!"Failed to elaborate the new theorem."
+      | some cstep =>
+        let msgs ← cstep.msgs.mapM (fun msg => msg.toString)
+        IO.println s!"Elaborated splits: \n\n{msgs}\n"
 
 
     return 0
@@ -70,4 +126,8 @@ def main (args : List String) : IO UInt32 :=
   training_data.validate args
 
 
-#eval main ["Mathlib.Logic.Hydra"]
+
+
+
+-- #eval main ["Mathlib.Logic.Hydra"]
+#eval main ["ProofTree.Basic"]

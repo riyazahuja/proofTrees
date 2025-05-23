@@ -16,6 +16,14 @@ theorem duh2 (p q : Prop) : p ∧ q → q ∧ p := by
   . exact h.2
   . exact h.1
 
+theorem duh3 (p q : Prop) : p ∧ q → q ∧ p := by
+  intro h
+  have right : p := by
+    exact h.1
+  constructor
+  . exact h.2
+  . exact right
+
 
 
 theorem example_with_simp_all (p q r : Prop) :

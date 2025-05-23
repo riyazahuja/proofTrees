@@ -2,7 +2,9 @@
 import Lean
 import Lean.Meta.Basic
 import Lean.Meta.CollectMVars
-open Lean Elab Server Std
+import Init.Data.String.Basic
+
+open Lean Elab Server Std String
 
 structure Hypothesis where
   username : String
@@ -290,6 +292,89 @@ def ProofTree.toString (tree : ProofTree) : String :=
 
 instance : ToString ProofTree where
   toString := ProofTree.toString
+
+
+
+partial def ProofTree.getBreakpoints (tree : ProofTree)
+  (breakpoint_type : String := "all_splits"): List ProofStep :=
+  match breakpoint_type with
+  | "all_tactics" =>
+    let recursive := tree.children.toList.map (fun child => child.getBreakpoints breakpoint_type) |>.flatten
+    tree.node :: recursive
+  | "all_splits" =>
+    let recursive := tree.children.toList.map (fun child => child.getBreakpoints breakpoint_type) |>.flatten
+    if tree.children.size < 2 then
+      recursive
+    else
+      tree.children.toList.map (fun c => c.node) ++ recursive
+  | "spawned" =>
+    let recursive := tree.children.toList.map (fun child => child.getBreakpoints breakpoint_type) |>.flatten
+    if tree.spawned_children.size < 2 then
+      recursive
+    else
+      tree.children.toList.map (fun c => c.node) ++ recursive
+  | "bifurcated" =>
+    let recursive := tree.children.toList.map (fun child => child.getBreakpoints breakpoint_type) |>.flatten
+    if tree.children.size - tree.spawned_children.size < 2 then
+      recursive
+    else
+      tree.children.toList.map (fun c => c.node) ++ recursive
+  | _ => []
+
+
+-- Now want a function that takes in a string representation of a theorem
+-- and all the breakpoints, and replaces each breakpoint B with extract_goals; B
+-- To do this, we proceed greedily. For B[0], split theorem at first instance into T0,R
+-- with T0 before B[0], R after B[0]. Replace B[0] with extract_goals; B[0] and then recurse on R
+-- with B[1]. We get back a list of strings T0, T1, ... and output append(T0, ...)
+
+def String.splitAtString (s : String) (pattern : String): Option (String × String) :=
+  if h : pattern.endPos.1 = 0 then none
+  else
+    have hPatt := Nat.zero_lt_of_ne_zero h
+    let rec loop (pos : String.Pos) :=
+      if h : pos.byteIdx + pattern.endPos.byteIdx > s.endPos.byteIdx then
+        none
+      else
+        have := Nat.lt_of_lt_of_le (Nat.add_lt_add_left hPatt _) (Nat.ge_of_not_lt h)
+        if s.substrEq pos pattern 0 pattern.endPos.byteIdx then
+          -- Found a match, return split strings
+          let before := s.extract 0 pos
+          let after := s.extract (pos + pattern) s.endPos
+          some (before, after)
+        else
+          have := Nat.sub_lt_sub_left this (lt_next s pos)
+          loop (s.next pos)
+      termination_by s.endPos.1 - pos.1
+    loop 0
+
+
+
+
+
+
+partial def insertBreakpoints (thm : String) (breakpoints : List ProofStep) : String :=
+  match breakpoints with
+  | [] => thm
+  | currentBreakpoint :: rest =>
+    let tacticToFind := currentBreakpoint.tacticString
+    let opt := thm.splitAtString tacticToFind
+    match opt with
+    | some (T,R) =>
+      let recursive := insertBreakpoints R rest
+      s!"{T}extract_goal; {tacticToFind}{recursive}"
+    | none => s!"[ERROR FINDING {tacticToFind} in {thm}]"
+
+def insertBreakpointsFromTree (thm : String) (tree : ProofTree) (breakpointType : String := "all_splits") : String :=
+  let breakpoints := tree.getBreakpoints breakpointType
+  insertBreakpoints thm breakpoints
+
+
+
+
+
+
+
 
 partial def buildProofTree (steps : List ProofStep) (output : List (ProofStep × List Nat × List Nat)) (rootIdx : Nat) : ProofTree :=
   let (node, children, spawnedChildren) := output[rootIdx]!
