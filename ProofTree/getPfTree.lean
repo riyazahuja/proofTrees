@@ -70,9 +70,16 @@ def trainingData (args : Cli.Parsed) : IO UInt32 := do
       let results ← results
       let steps := results.flatMap (fun result => result.steps)
 
-      let PT_real : ProofTree := getProofTree steps |>.get!
+      IO.println s!"Theorem: \n{cmd.src.toString}\n"
+      let PT_real? := getProofTree steps
+
+      if PT_real?.isNone then
+        continue
+
+      let PT_real := getProofTree steps |>.get!
 
       IO.println s!"ProofTree: \n{PT_real}\n\n"
+      -- IO.println "===================="
       -- let PT_json : Json := toJson PT_real
       -- IO.println s!"ProofTree JSON: \n{PT_json}\n\n"
 
@@ -107,7 +114,8 @@ def trainingData (args : Cli.Parsed) : IO UInt32 := do
       | some cstep =>
         let msgs ← cstep.msgs.mapM (fun msg => msg.toString)
         IO.println s!"Elaborated splits: \n\n{msgs}\n"
-
+      -- NOTE: only splits theorems with no errors (no sorry?), and is a tactic proof.
+      -- It ignores things like <;> (probably, leads to weird behavior)
 
     return 0
 
@@ -130,4 +138,4 @@ def main (args : List String) : IO UInt32 :=
 
 
 -- #eval main ["Mathlib.Logic.Hydra"]
-#eval main ["ProofTree.Basic"]
+-- #eval main ["ProofTree.Basic"]

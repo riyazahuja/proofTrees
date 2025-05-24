@@ -363,11 +363,14 @@ partial def insertBreakpoints (thm : String) (breakpoints : List ProofStep) : St
     | some (T,R) =>
       let recursive := insertBreakpoints R rest
       s!"{T}extract_goal; {tacticToFind}{recursive}"
-    | none => s!"[ERROR FINDING {tacticToFind} in {thm}]"
+    | none => -- silent errors, i.e. Hydra <;>'s etc.
+      let recursive := insertBreakpoints thm rest
+      recursive
 
 def insertBreakpointsFromTree (thm : String) (tree : ProofTree) (breakpointType : String := "all_splits") : String :=
   let breakpoints := tree.getBreakpoints breakpointType
   insertBreakpoints thm breakpoints
+
 
 
 
